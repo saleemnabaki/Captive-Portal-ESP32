@@ -1,14 +1,664 @@
+class CaptiveRequestHandler;
+#include <DNSServer.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include "SPIFFS.h"
+#include <FS.h>
+#include <ESP32Ping.h>
+#include <ArduinoJson.h>     // 7.0.4
+#include <Arduino.h>
+
+String ssid, password;
+
+const int buttonPin = 5;  // Replace with the GPIO pin where your button is connected
+const unsigned long holdTime = 5000;  // 5 SECONDS To erase settings Button hold 
+unsigned long buttonPressStartTime = 0;
+bool isButtonPressed = false;
+
+int GreenLed = 13;   //GREEN LIGHT CONNECTED
+int RedLed = 12;     //RED LIGHT DISCONNECTED
+
+
+const size_t capacity = JSON_OBJECT_SIZE(5) + 150;
+
+char mqtt_host[32];
+const char* remote_host = "www.google.com";
+
+String scanNetworks();
+
+
+AsyncWebServer server(80);
+DNSServer dnsServer; 
+
+
+
+//------------------------------- config scanNetworks --------------------------------------
+
+String scanNetworks() {
+   WiFi.disconnect();
+  int numNetworks = WiFi.scanNetworks();
+  String result = "[";
+
+  for (int i = 0; i < numNetworks; i++) {
+    if (i > 0) {
+      result += ",";
+    }
+    result += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + WiFi.RSSI(i) + "}";
+  }
+
+  result += "]";
+  // Store the scanned networks in EEPROM
+
+  return result;
+}
+
+//********************************* void handleButton **************************************
+
+void handleButton() {
+  static unsigned long buttonPressStartTime = 0;
+  static bool isButtonPressed = false;
+
+
+  int buttonState = digitalRead(buttonPin);
+
+  if (buttonState == LOW) {  // Button is pressed
+    if (!isButtonPressed) {
+      buttonPressStartTime = millis();
+      isButtonPressed = true;
+    }
+
+
+    if (millis() - buttonPressStartTime >= holdTime) {
+      Serial.println("Button held for 3 seconds. Formatting SPIFFS...");
+      delay(500);
+  
+      SPIFFS.format();
+
+      digitalWrite(GreenLed, LOW);
+      digitalWrite(RedLed, LOW);
+
+      Serial.println("Formatting SPIFFS completed.");
+      delay(500);
+
+
+      ESP.restart();
+    }
+  } else {
+
+    isButtonPressed = false;
+  }
+}
+
+//**********************************************************************************************
+
+const char index_html[] PROGMEM = R"rawliteral( 
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Setup</title>
+
+<style>
+    body {
+      color: white;
+      background-color: #5f89b0;
+      font-family: Helvetica, Verdana, Arial, sans-serif;
+    }
+    h1, p {
+      text-align: center;
+    }
+    p {
+      margin-bottom: 30px;
+    }
+
+    br {
+      display: block;
+      margin: 10px 0;
+      line-height: 22px;
+      content: " ";
+    }
+
+    label {
+      text-align: left;
+      padding: 2%;
+    }
+
+    input {
+      border-radius: 4px;
+      border: 2px solid #0056a8;
+      width: 90%;
+      padding: 10px;
+      display: block;
+      margin-right: auto;
+      margin-left: auto;
+    }
+
+    form {
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      width: 300px;
+      max-width: 100%;
+      text-align: center;
+      margin: auto; /* Added for horizontal centering */
+      margin-top: 45px; /* Additional margin to the top of the form for spacing */
+    }
+
+    input[type="submit"],
+    input[type="button"] {
+      font-size: 25px;
+      background-color: #0056a8;
+      color: white;
+      margin-bottom: 20px; /* Adjust the bottom margin for spacing between buttons */
+    }
+
+    label {
+      display: block;
+      margin-bottom: 12px; /* Add margin-bottom for spacing */
+      color: #555555;
+    }
+
+    #networkResults {
+      text-align: left;
+      font-size: 15px;
+      color: blue;
+    }
+
+    .networkElement {
+      display: flex;
+      justify-content: space-between;
+      align-items: center; /* Ensure vertical alignment is centered */
+      padding: 5px 0; /* Add some padding for better spacing */
+      margin-bottom: 2px; /* Reduced margin to decrease vertical distance */
+    }
+
+.ssid, .rssi {
+  margin: 0 10px; /* Adjust margin as needed for spacing */
+}
+
+/* Adjust the margin-right of the ssid class to control the spacing */
+.ssid {
+  flex-grow: 1; /* Allow the SSID to take up more space if needed */
+  text-align: left;
+}
+
+.rssi {
+  flex-shrink: 0; /* Prevent the RSSI from shrinking */
+  text-align: right;
+}
+
+
+ .spinner-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100px; /* Adjust the height as needed */
+  }
+
+  .spinner-dot {
+    width: 10px;
+    height: 10px;
+    background-color: #3498db;
+    border-radius: 50%;
+    margin: 0 5px; /* Adds a little space between the dots */
+    /* Animation */
+    animation: dotBounce 1.4s infinite ease-in-out both;
+  }
+
+  @keyframes dotBounce {
+    0%, 80%, 100% { transform: scale(0); }
+    40% { transform: scale(1.0); }
+  }
+
+.q.q-0:after{background-position-x:0}
+.q.q-1:after{background-position-x:-22px}
+.q.q-2:after{background-position-x:-44px}
+.q.q-3:after{background-position-x:-66px}
+.q.q-4:after{background-position-x:-88px}  
+.q.q-5:before{background-position-x:-112px;padding-right:7px; width:20px;height:20px;}.q5
+.q{float:left}.q:after,.q:before{content:'';width:22px;height:22px;display:inline-block;background-repeat:no-repeat;background-position: 22px 0;
+
+background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIQAAAAWCAYAAAAB6jTvAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAJcEhZcwAADsQAAA7EAZUrDhsAAAABYktHRACIBR1IAAAAB3RJTUUH6AEdFgIrL/HRvQAAAlZJREFUaEPtmkuPEkEQx6uHx/hYWdjNurJeTIzxsjcD8i32qNG4rs/ERGPiwcSv4NUvBAc48Lhy8UuYaWY3Cww4VXTrzArqpmuRSP3IP93TQxoyFFX/GlDTGHCk3+9DGIYQRREd12o1Gl1ot9uglILJZEIjUq1WaXSl1+vRvp7n0YhUKhUaXeh0Omb2E459kf3BBziFEc19yNH868YXOubEM6MgEBIQQoq1DQgsF8KvyFURUkhACCnOFRDdbheazSap0WjAcDgkuaZf7CiS4mI0GpHzT4qL++En0nX9Ai4Fj8wqD3cG76AQHEJJH8HdwXuzuhzO9UnmcjnI5/Mk3/cpEDhrMUMHnALb1fF4/GNu21cOdlSBtKdKsOeVzCof5XjPcrz3slmZksEdDH/C3n9YF3OJWWeezrIeV0P4ayQg1oB5mcBy9tzCgEDj2Gq1yDyiEI4afFEGEkFzt6tfku4df4SsypozbtzSb+CGfkXKBw8histbFjIkV4r6KWlTH/72g3OlqK7Sre6k5rEwIKx5tOIGPQO3b7BGDIWGj4tdtTkzj0YZRnNq3+8iA5lZchKXkiGkkID4z7Fl6Ns0pHlSluRcAkIgf2GRgBAoe1g87CSs6vW6WebpKLb1M9LtwVsSJ1eCx7Cjn1O6Ozj+bFbd8eNO5aZ+DdngAQnxFM/3ZksfwbXgCSmZppcBZoF5KsBl84wZHt6CToqTLbWx0D27kry1ux2/DhdlVUx1K5zQnrh3rFVFSoaQQgJiRYhg9tvKv+bCA+LU/DFUWD2m8SOAE3OEAHwH2JffmdnbJxsAAAAASUVORK5CYII=');
+
+}
+
+  </style>
+
+<div id="signalStrengthContainer"></div>
+<script>
+
+function createSignalStrengthImage(strength) {
+  var signalElement = document.createElement("div");
+  signalElement.className = "q"; // Reset the class
+
+  // Assign additional class based on signal strength
+  if (strength >= -50) {
+    signalElement.classList.add("q-4"); // strong signal
+  } else if (strength >= -60) {
+    signalElement.classList.add("q-3"); // good signal
+  } else if (strength >= -70) {
+    signalElement.classList.add("q-2"); // moderate signal
+  } else if (strength >= -80) {
+    signalElement.classList.add("q-1"); // weak signal
+  }
+
+  
+  //signalElement.classList.add("q-5");      // If you want to add the Lock icon
+
+  return signalElement;
+}
+
+
+function scanNetworks() {
+   
+    var spinnerContainer = document.createElement("div");
+    spinnerContainer.className = "spinner-container";
+
+    
+    spinnerContainer.innerHTML = '<div class="spinner-dot"></div>'.repeat(3);
+
+    
+    var resultsContainer = document.getElementById("networkResults");
+    resultsContainer.innerHTML = '';
+    resultsContainer.appendChild(spinnerContainer);
+
+ 
+  var resultsContainer = document.getElementById("networkResults");
+  resultsContainer.innerHTML = '';
+  resultsContainer.appendChild(spinnerContainer);
+
+  var xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState == 4) {
+     
+      resultsContainer.removeChild(spinnerContainer);
+
+      if (xhr.status == 200) {
+        var networks = JSON.parse(xhr.responseText);
+        displayNetworks(networks);
+      } else {
+       
+        console.error("Error fetching scan results");
+      }
+    }
+  };
+  xhr.open("GET", "/scan", true);
+  xhr.send();
+}
+
+  function displayNetworks(networks) {
+  var resultsContainer = document.getElementById("networkResults");
+  resultsContainer.innerHTML = ''; // Clear existing results
+
+  
+  var numberOfNetworksToDisplay = Math.min(7, networks.length);
+
+  for (var i = 0; i < numberOfNetworksToDisplay; i++) {
+    var networkElement = document.createElement("div");
+    networkElement.className = "networkElement";
+
+    var ssidElement = document.createElement("div");
+    ssidElement.className = "ssid";
+    ssidElement.textContent = networks[i].ssid;
+
+    var signalStrengthElement = createSignalStrengthImage(networks[i].rssi);
+
+    networkElement.appendChild(ssidElement);
+    networkElement.appendChild(signalStrengthElement);
+
+    networkElement.onclick = function () {
+      document.getElementById("ssid").value = this.firstChild.textContent;
+
+     
+      var passwordInput = document.getElementById("password");
+      if (passwordInput) {
+        passwordInput.focus();
+      }
+    };
+
+    resultsContainer.appendChild(networkElement);
+  }
+}
+
+
+async function fetchConnectionStatus() {
+
+  try {
+    const response = await fetch("/connection-status");
+    const status = await response.text();
+
+    console.log("Server response:", response); // Log the entire response for debugging
+    console.log("Received status:", status);
+
+    const connectionStatusDisplay = document.getElementById("connectionStatusDisplay");
+    const ssidInput = document.getElementById("ssid");
+    const passwordInput = document.getElementById("password");
+    const connectButton = document.getElementById("connectButton");
+    const scanButton = document.getElementById("scanButton");
+    const infoMessage = document.getElementById("infoMessage");
+
+    connectionStatusDisplay.textContent = status;
+    connectionStatusDisplay.style.textAlign = "center";
+
+    if (status === "Connected") {
+
+      connectionStatusDisplay.style.color = "#00ff00";
+      connectionStatusDisplay.style.fontSize = "30px";
+      connectionStatusDisplay.style.fontWeight = "bold";
+
+     
+      document.getElementById("formContainer").style.display = "none";
+      
+     
+      infoMessage.style.display = "block";
+    } else {
+
+      connectionStatusDisplay.style.color = "#ff0000";
+      connectionStatusDisplay.style.fontSize = "20px";
+      connectionStatusDisplay.style.fontWeight = "bold";
+
+     
+      document.getElementById("formContainer").style.display = "block";
+
+     
+      infoMessage.style.display = "none";
+    }
+    connectionStatusDisplay.style.textAlign = "center";
+  } catch (error) {
+    console.error('Error fetching connection status:', error);
+  }
+}
+
+fetchConnectionStatus();
+
+</script>
+
+</head>
+<body>
+
+<h1>WIFI SETTINGS</h1>
+<div id="connectionStatusDisplay">Checking connection...</div>
+<p>Enter your network credentials</p>
+
+<div id="formContainer">
+<form action="/configure" method="post">
+
+   <input type="text" name="ssid" id="ssid" placeholder="Wi-Fi SSID"><br>
+   <br>
+  
+  <input type="password" name="password" id="password" placeholder="Wi-Fi Password"><br>
+  <input type="submit" value="Connect" id="connectButton">
+  <div id="myArea"></div>
+  <br>
+  <div id="networkResults"></div>
+  <br>
+  <input type="button" value="Scan Networks" id="scanButton" onclick="scanNetworks()">
+  
+</form>
+
+</div>
+
+
+<div id="infoMessage" style="display: none; margin-top: 100px;">
+  <p>If you want to change the network, all you can do is! Hold over the button for 5 seconds to reset the settings.</p>
+</div>
+
+
+  <br>
+
+</body>
+</html>
+
+)rawliteral";
+
+
+//************************************************************************************************
+
+
+//Falied
+
+const char* falied = R"(
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Base64 JPG Example</title>
+</head>
+<body>
+
+<div style="text-align: center; margin-top: 215px;">
+<img src="data:image/png;base64,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" alt="falied" style="display: block; margin: auto;">
+
+
+  <div style='text-align:center; margin-top: 50px; transform:translateY(-50%); color:blue; font-size:20px; font-weight:bold; margin-top: 96px;'>
+
+  <span style="color: black;">Failed to connect to WiFi. Incorrect credentials</span><br>
+  
+  <a href='/'>Try again <span style='color: green; text-decoration: none; font-size: 48px; margin-top: 40px;'>&larr;</span></a>
+
+</div>
+</body>      
+</html>
+
+)";
+
+//********************************* void startAPMode *********************************************
+
+void startAPMode() {
+  WiFi.softAP("esp-captive");
+  Serial.println("SoftAP started");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.softAPIP());
+  server.begin();
+}
+
+//************************************ bool connectToWiFi ******************************************
+
+
+bool connectToWiFi(const char *ssid, const char *pwd) {
+    Serial.println("\nConnecting to WiFi...");
+
+    WiFi.begin(ssid, pwd);
+
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+        if (millis() - startTime >= 3000) {
+            Serial.println("\nRedirect to page check credentials");
+            return false; // Connection failed
+        }
+    }
+
+    Serial.println("\nWiFi Connected.");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    return true; // Connection successful
+}
+
+
+//******************************* bool loadCredentials *************************************
+
+bool loadCredentials(String &ssid, String &password) {
+  File configFile = SPIFFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    return false;
+  }
+
+  size_t size = configFile.size();
+  std::unique_ptr<char[]> buf(new char[size]);
+  configFile.readBytes(buf.get(), size);
+  configFile.close();
+
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, buf.get());
+
+  if (error) {
+    Serial.println("Failed to parse config file");
+    return false;
+  }
+
+  ssid = doc["ssid"].as<String>();
+  password = doc["password"].as<String>();
+
+  // Print loaded credentials
+  Serial.println("Loaded Credentials:");
+  Serial.print("SSID: ");
+  Serial.println(ssid);
+  Serial.print("Password: ");
+  Serial.println(password);
+
+  return true;
+}
+
+
+//------------------------------- config Redirect --------------------------------------
+
+class CaptiveRequestHandler : public AsyncWebHandler{   //redirect
+
+public:
+
+    CaptiveRequestHandler() {}
+    virtual ~CaptiveRequestHandler() {}
+    bool canHandle(AsyncWebServerRequest *request)
+    {
+        request->addInterestingHeader("ANY");
+        return true;
+    }
+    void handleRequest(AsyncWebServerRequest *request)
+    {
+        request->send_P(200, "text/html", index_html);
+    }
+};
+
+//******************************* void setupWebServerRoutes **************************************************
+
+
+void setupWebServerRoutes() {
+  // Serve the HTML page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", index_html);
+  });
+
+ 
+  server.on("/connection-status", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (WiFi.status() == WL_CONNECTED) {
+      request->send(200, "text/plain", "Connected");
+    } else {
+      request->send(200, "text/plain", "Not Connected");
+    }
+  });
+
+
+  server.on("/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String networks = scanNetworks();
+    request->send(200, "application/json", networks);
+  });
+
+
+
+    server.on("/configure", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasArg("ssid") || !request->hasArg("password")) {
+        request->send(400, "text/plain", "Missing parameters");
+        return;
+    }
+
+    String ssid = request->arg("ssid");
+    String password = request->arg("password");
+
+  
+    if (connectToWiFi(ssid.c_str(), password.c_str())) {
+        // Credentials are correct and WiFi connection is successful
+        DynamicJsonDocument doc(256);
+        doc["ssid"] = ssid;
+        doc["password"] = password;
+
+        File configFile = SPIFFS.open("/config.json", "w");
+        if (!configFile) {
+            request->send(500, "text/plain", "Failed to open config file for writing");
+            return;
+        }
+
+        if (serializeJson(doc, configFile) == 0) {
+            request->send(500, "text/plain", "Failed to serialize JSON");
+            configFile.close();
+            return;
+        }
+
+        configFile.close();
+
+        Serial.println("Credentials Saved");
+
+       
+               request->send(200, "text/html", index_html);
+    } else {
+       
+               request->send(200, "text/html", falied);
+     
+    }
+});
+
+
+    server.onRequestBody([](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    request->send(200, "text/plain", "");
+  });
+
+}
+
+//-------------------------------  void setup --------------------------------------
 
 void setup() {
-  // initialize digital pin LED_BUILTIN as an output.
-  pinMode(LED_BUILTIN, OUTPUT);
+
+  Serial.begin(115200);
+
+  // Read configuration from FS JSON
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
+
+   // Load credentials and attempt to connect to WiFi
+
+  if (loadCredentials(ssid, password) && connectToWiFi(ssid.c_str(), password.c_str())) {
+    Serial.println("Successfully connected to WiFi");
+  } else {
+    // If loading credentials or connection fails, start AP mode
+    startAPMode();
+  }
+
+
+  setupWebServerRoutes();
+
+
+  pinMode(GreenLed, OUTPUT);
+  pinMode(RedLed, OUTPUT);
+  pinMode(buttonPin, INPUT);
+
+  Serial.println("Starting DNS Server");
+  dnsServer.start(53, "*", WiFi.softAPIP());
+  server.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);   //redirect
+
+  Serial.println("Starting Login Page ");
+  
+  server.begin();
 }
 
-// the loop function runs over and over again forever
+
+
+//-------------------------------  void loop --------------------------------------
+
 void loop() {
-  digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
-  delay(1000);                      // wait for a second
-  digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
-  delay(1000);                      // wait for a second
+ dnsServer.processNextRequest();
+
+handleButton();
 }
+
 
