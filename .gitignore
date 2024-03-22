@@ -452,7 +452,7 @@ const char* falied = R"(
 //********************************* void startAPMode *********************************************
 
 void startAPMode() {
-  WiFi.softAP("esp-captive");
+  WiFi.softAP("captive");
   Serial.println("SoftAP started");
   Serial.println("IP address: ");
   Serial.println(WiFi.softAPIP());
